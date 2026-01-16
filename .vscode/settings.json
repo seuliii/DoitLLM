@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./GPT_Agent_book/chap07/sec01"
+    ]
+}
