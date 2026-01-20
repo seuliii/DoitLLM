@@ -88,7 +88,7 @@ if user_input := st.chat_input():
             tool_call_msg = [tool_call["function"] for tool_call in tool_calls]
         st.write(tool_call_msg)
 
-    print('\m=================')
+    print('\n=================')
     print(content)
 
     # print('\n============== tool_calls_chunk')
