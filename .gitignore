@@ -1,5 +1,4 @@
 # Environment
-
 .env
 .venv
 env/
@@ -7,3 +6,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+#extension
+*.pdf
