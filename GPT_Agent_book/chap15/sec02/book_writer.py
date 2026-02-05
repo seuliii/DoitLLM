@@ -102,11 +102,12 @@ def supervisor(state : State):
         사용자의 요구에 달성하기 위해 현재 해야 할 일이 무엇인지 결정한다.
 
         supervisor가 활용할 수 있는 agent는 다음과 같다.
-        -content_strategist : 사용자의 요구 사항이 명확해졌을 때 사용한다. AI팀의 콘텐ㅌ츠 전략을 결정하고,
+        -content_strategist : 사용자의 요구 사항이 명확해졌을 때 사용한다. AI팀의 콘텐츠 전략을 결정하고,
         전체 책의 목차(outline)를 작성한다.
         -communicator: AI팀에서 해야 할 일을 스스로 판단할 수 없을 때 사용한다.
         사용자에게 진행 상황을 보고하고, 다음 지시를 물어본다.
-        -web_search_agent: 웹 검색을 통해 목차(outline) 작성에 필요한 정보를 확보한다.
+        -web_search_agent: vector_search_agent를 시도하고, 검색 결과(references)에 필요한 정보가 부족한 경우 사용한다.
+        웹 검색을 통해 해당 정보를 벡터DB에 보강한다.
         -vector_search_agent: 벡터 DB 검색을 통해 목차(outline) 작성에 필요한 정보를 확보한다.
 
 
@@ -243,6 +244,12 @@ def vector_search_agent(state: State):
 
 def content_strategist(state: State):
     print("\n\n=========CONTENT STRATEGIST=========")
+
+    task_history = state.get("task_history",[])
+    task = task_history[-1]
+    if task.agent != "content_strategist":
+        raise ValueError(f"Content Stragegist가 아닌 agent가 목차 작성을 시도하고 있습니다. \n{task}")
+    
     content_strategist_system_prompt = PromptTemplate.from_template(
         """
              너는 책을 쓰는 AI 팀의 콘텐츠 전략가(Content Strategist) fhtj,
@@ -252,25 +259,74 @@ def content_strategist(state: State):
              지난 목차가 있다면 그 버전을 사용자의 요구에 맞게 수정하고, 없다면 새로운 목차를 제안한다.
              목차를 작성하는데 필요한 정보는 "참고 자료"에 있으므로 활용한다.
 
-             -----------------------
-             -지난 목차 : {outline}
-             -----------------------
-             -이전 대화 내용 : {messages}
-             -----------------------
-             -참고 자료 : {references}
+            다음 정보를 활용하여 목차를 작성하라.
+            -사용자 요구사항(user_request)
+            -작업(task)
+            -검색 자료(references)
+            -기존 목차(previous_outline)
+            -이전 대화 내용(messages)
 
+            너의 작업 목표는 다음과 같다:
+             1. 만약 "기존 목차 구조(previous_outline)"이 존재한다면, 사용자의 요구 사항을 토대로
+             "기존 목차 구조"에서 어떤 부분을 수정하거나 추가할지 결정한다.
+             -"이번 목차 작성의 주안점"에 사용자 요구사항(user_request)을 충족시키는 것을 명시해야한다.
+             2. 책의 전반적인 구조(chapter,section)를 설계하고, 각 chapter와 section의 제목을 정한다.
+             3. 책의 전반적인 세부 구조(chapter, section, sub-section)를 설계하고,
+             sub-section하부의 주요 내용을 리스트 형태로 정리한다.
+             4. 목차의 논리적인 흐름이 사용자 요구를 충족시키는지 확인한다.
+             5. 참고 자료(references)를 적극 활용하여 근거에 기반한 목차를 작성한다.
+             6. 참고 문헌은 반드시 참고 자료(references)를 근거로 작성해야 하며, 최대한 풍부하게 준비한다.
+             URL은 전체 주소를 적어야 한다.
+             7. 추가 자료나 리서치가 필요한 부분을 파악하여 supervisor에게 요청한다.
+
+             사용자 요구사항(user_request)을 최우선으로 반영하는 목차로 만들어야 한다.
+
+             -------------------------------
+             -사용자 요구사항(user_request)
+             {user_request}
+             -------------------------------
+             -작업(task)
+             {task}
+             -------------------------------
+             -참고 자료 : {references}
+             {references}
+             -------------------------------
+             -기존 목차(previous_outline)
+             {outline}
+             -------------------------------
+             -이전 대화 내용(messages)
+             {messages}
+             -------------------------------
+             
+             작성 형식 아래 양식을 지키되 하부 항목으로 더 세분화해도 좋다. 목차(outline) 양식의 챕터,
+             섹션 등 항목의 개수는 필요한만큼 추가하라.
+             섹션 개수는 최소 2개 이상이어야 하며, 더 많으면 좋다.
+
+             outline_template은 예시로 앞부분만 제시한 것이다. 
+             각 장은 ':---CHAPTER DIVIDER---:'로 구분한다.
+             outline_template :
+             {outline_template}
+
+             사용자가 피드백을 추가로 제공할 수 있도록 논리적인 흐름과 주요 목차 아이디어를 제안하라.
         """
     )
     
     content_strategist_chain = content_strategist_system_prompt | llm | StrOutputParser()
 
+    user_request = state.get("user_request","")
     messages = state['messages']
     outline = get_outline(current_path)
+    
+    with open(f"{current_path}/templates/outline_template.md","r",encoding='utf-8') as f:
+        outline_template = f.read()
 
     inputs = {
+        "user_request": user_request,
+        "task": task,
         "messages" : messages,
         "outline" : outline,
-        "references" : state.get("references",{"queries":[],"docs":[]})
+        "references" : state.get("references",{"queries":[],"docs":[]}),
+        "outline_template":outline_template
     }
     gathered = ''
     for chunk in content_strategist_chain.stream(inputs):
@@ -281,25 +337,30 @@ def content_strategist(state: State):
 
     save_outline(current_path, gathered)
 
-    content_strategist_message = f"[(Content Strategist)] 목차 작성 완료 :"
+    if '---: DONE :---' in gathered:
+        review = gathered.split('---: DONE :---')[1]
+    else:
+        review = gathered[-200:]
+
+    content_strategist_message = f"[(Content Strategist)] 목차 작성 완료 : outline 작성 완료 \n{review}"
     print(content_strategist_message)
     messages.append(AIMessage(content_strategist_message))
 
-    task_history = state.get("task_history",[])
+    # task_history = state.get("task_history",[])
 
-    if task_history[-1].agent != "content_strategist":
-        raise ValueError(f"Content Strategist가 아닌 agent가 목차 작성을 시도하고 있습니다.\n {task_history[-1]}")
+    # if task_history[-1].agent != "content_strategist":
+    #     raise ValueError(f"Content Strategist가 아닌 agent가 목차 작성을 시도하고 있습니다.\n {task_history[-1]}")
 
     task_history[-1].done = True
     task_history[-1].done_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    new_task = Task(
-        agent = "communicator",
-        done=False,
-        description="AI팀의 진행 상황을 사용자에게 보고하고, 사용자의 의견을 파악하기 위해 대화를 나눈다",
-        done_at = ""
-    )
-    task_history.append(new_task)
+    # new_task = Task(
+    #     agent = "communicator",
+    #     done=False,
+    #     description="AI팀의 진행 상황을 사용자에게 보고하고, 사용자의 의견을 파악하기 위해 대화를 나눈다",
+    #     done_at = ""
+    # )
+    # task_history.append(new_task)
 
     return {"messages" : messages, "task_history" : task_history}
 
@@ -446,9 +507,9 @@ graph_builder.add_conditional_edges(
         "web_search_agent" : "web_search_agent"
     }
 )
-graph_builder.add_edge("content_strategist", "communicator")
+graph_builder.add_edge("content_strategist", "business_analyst")
 graph_builder.add_edge("web_search_agent", "vector_search_agent")
-graph_builder.add_edge("vector_search_agent", "communicator")
+graph_builder.add_edge("vector_search_agent", "business_analyst")
 graph_builder.add_edge("communicator", END)
 
 graph = graph_builder.compile()
@@ -488,3 +549,4 @@ while True:
     save_state(current_path,state)
 
 #HYBE와 JYP 비교하는 책 써줘. CEO와 경영전략에 대해 써줘
+#HYBE와 JYP의 CEO, 경영전략, 기업문화에 대해 비교하는 내용으로 목차를 써줘.
